@@ -1,6 +1,8 @@
 import datetime
 import requests
 import json
+import os
+from typing import Literal
 
 #--------------------------------------------------------------#
 #Comment Format (VSCode highlighting):
@@ -14,12 +16,14 @@ import json
 #--------------------------------------------------------------#
 #TODO Board
 #TODO lichessAccount.getGame()
-#TODO add more decline challenge reasons
 #--------------------------------------------------------------#
 
 #!load token
 try:
     token = json.load(open("accounts.json","r"))["lichess"]["token"]
+except FileNotFoundError: #? if file is not found
+    accounts = {"lichess":{"token":input("Enter your lichess token: ")}} #* create file
+    json.dump(accounts,open("accounts.json","x"))
 except: #? if token is not found
     try:
         accounts = json.load(open("accounts.json","r"))
@@ -138,7 +142,7 @@ class lichessAccount:
         self.token = token #* set token
         accountinfo = requests.get(url=f"{self.endpoint}/api/account",headers={"Authorization": f"Bearer {self.token}"}) #? get account info
         if accountinfo.status_code == 200:
-            self.accountinfo = accountinfo.json()
+            pass
         elif accountinfo.status_code == 429: #!raises if rate limited
             raise RateLimitedException("You are being rate limited.")
         else:
@@ -147,7 +151,7 @@ class lichessAccount:
                 print(accountinfo.text)
             raise TokenError("Invalid token")
         if not __debug__: #** prints account info if debug mode is on (launched with -O)
-            print(self.accountinfo)
+            print(accountinfo)
         #! try to upgrade to bot account
         try:
             requests.post(url=f"{self.endpoint}/api/bot/account/upgrade",headers={"Authorization": f"Bearer {self.token}"})
@@ -160,20 +164,32 @@ class lichessAccount:
         #//""" #TODO: Add a way to stop the run loop
         #//    #TODO: Add a way so the bot shows as online
         pass
-    def updateAccountInfo(self) -> None:
-        """Updates the account info
+    def getAccountInfo(self) -> dict:
+        """Gets account info. See https://lichess.org/api#/tag/Account for more info
 
         Raises:
             RateLimitedException: Raises if the account is rate-limited
+            ValueError: Raises if an error occurs
             TokenError: Raises if the token is invalid
+
+        Returns:
+            dict: The account info
         """
-        accountinfo = requests.get(url=f"{self.endpoint}/api/account",headers={"Authorization": f"Bearer {self.token}"})
-        if accountinfo.status_code == 200:
-            self.accountinfo = accountinfo.json()
-        elif accountinfo.status_code == 429:
+        response = requests.get(url=f"{self.endpoint}/api/account",headers={"Authorization": f"Bearer {self.token}"})
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
         else:
-            raise TokenError("Invalid token")
+            raise ValueError(response.json()["error"])
+    def getEmail(self) -> str:
+        response = requests.get(url=f"{self.endpoint}/api/account/email",headers={"Authorization": f"Bearer {self.token}"})
+        if response.status_code == 200:
+            return response.json()["email"]
+        elif response.status_code == 429:
+            raise RateLimitedException("You are being rate limited.")
+        else:
+            raise ValueError(response.json()["error"])
     def checkIfStreaming(self, gameid: str="") -> dict:
         """Check if a given game is being streamed
 
@@ -196,10 +212,8 @@ class lichessAccount:
             return response.json()
         elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
-        elif response.status_code == 404:
-            raise ConnectionError("Game not found")
-        else: 
-            raise TokenError("Invalid token")
+        else:
+            raise ValueError(response.json()["error"])
     def getGame(self, gameid: str="") -> dict:
         raise NotImplementedError #TODO: Add a way to get a game
         return {"board":None,"chat":self.getGameChat(gameid)}
@@ -225,12 +239,8 @@ class lichessAccount:
             return
         elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
-        elif response.status_code == 404:
-            raise ConnectionError("Game not found")
-        elif response.status_code == 400:
-            raise ValueError(response.json()["error"])
         else:
-            raise TokenError("Invalid token")
+            raise ValueError(response.json()["error"])
     def abortGame(self, gameid: str) -> None:
         """Aborts a game before it starts
 
@@ -309,11 +319,9 @@ class lichessAccount:
             return tuple([response.json()["in"], response.json()["out"]])
         elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
-        elif response.status_code == 400:
-            raise ValueError(response.json()["error"])
         else:
-            raise TokenError("Invalid token")
-    def challengeUser(self,user: str,*,persistant:bool=True,acceptToken:str="",message:str="",rules:gameSetup=gameSetup()) -> json:
+            raise ValueError(response.json()["error"])
+    def challengeUser(self,user: str,*,rated:bool=False,persistant:bool=True,acceptToken:str="",message:str="",rules:gameSetup=gameSetup()) -> json:
         """Challenges a user to a game
 
         Args:
@@ -322,6 +330,7 @@ class lichessAccount:
             acceptToken (str, optional): The token of the other user. Use if you want to accept the game instantly. Defaults to "".
             message (str, optional): The message to send the other uesr, if acceptToken is set. Defaults to "".
             rules (gameSetup, optional): The rules to create the challenge with. See help(gameSetup) for more info. Defaults to gameSetup().
+            rated (bool, optional): Whether the game should be rated. Defaults to False.
 
         Raises:
             RateLimitedException: Raises if the account is rate-limited
@@ -335,6 +344,7 @@ class lichessAccount:
             message = "Your game with {opponent} is ready: {game}."
         if rules.getTime()[0]: #* if correspondence
             response = requests.post(f"{self.endpoint}/api/challenge/{user}",headers={"Authorization": f"Bearer {self.token}"},params={
+                "rated": rated,
                 "days": rules.getTime()[1],
                 "clock.limit": "",
                 "clock.increment": "",
@@ -360,10 +370,8 @@ class lichessAccount:
             return response.json()
         elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
-        elif response.status_code == 400:
-            raise ValueError(response.json()["error"])
         else:
-            raise TokenError("Invalid token")
+            raise ConnectionError(response.json()["error"])
     def acceptChallenge(self,challengeid: str) -> None:
         """Accepts a challenge sent to the bot
 
@@ -381,20 +389,119 @@ class lichessAccount:
             return
         elif response.status_code == 429:
             raise RateLimitedException("You are being rate limited.")
-        elif response.status_code == 400:
-            raise ValueError(response.json()["error"])
-        elif response.status_code == 404:
-            raise ConnectionError("Challenge not found")
         else:
-            raise TokenError("Invalid token")
+            raise ConnectionError(response.json()["error"])
     def declineChallenge(self,challengeid: str,reason:str="declineGeneric") -> None:
-        if reason not in ["registerToSendChallenges","youCannotChallengeX","xDoesNotAcceptChallenges","yourXRatingIsTooFarFromY"]: #TODO add more reasons from https://github.com/lichess-org/lila/blob/master/translation/source/challenge.xml#L14
+        """Declines a challenge sent to the bot
+
+        Args:
+            challengeid (str): The id of the challenge to decline
+            reason (str, optional): The reason to decline the challenge. Can be . Defaults to "declineGeneric".
+
+        Raises:
+            ValueError: Raises if the reason is invalid
+            RateLimitedException: Raises if the account is rate-limited
+            ConnectionError: Any other error
+        """
+        if reason not in ["registerToSendChallenges","youCannotChallengeX","xDoesNotAcceptChallenges","yourXRatingIsTooFarFromY","cannotChallengeDueToProvisionalXRating","xOnlyAcceptsChallengesFromFriends","declineGeneric","declineLater","declineTooFast","declineTooSlow","declineTimeControl","declineRated","declineCasual","declineStandard","declineVariant","declineNoBot","declineOnlyBot"]: #! All possible decline reasons (from https://github.com/lichess-org/lila/blob/master/translation/source/challenge.xml#L14)
             raise ValueError("Invalid reason")
         response = requests.post(f"{self.endpoint}/api/challenge/{challengeid}/decline",headers={"Authorization": f"Bearer {self.token}"},params={"reason": reason})
-
+        if response.status_code == 200:
+            return
+        elif response.status_code == 429:
+            raise RateLimitedException("You are being rate limited.")
+        else:
+            raise ConnectionError(response.json()["error"])
+    def cancelChallenge(self,challengeid:str,opponentToken:str="") -> None:
+        response = requests.post(f"{self.endpoint}/api/challenge/{challengeid}/cancel",headers={"Authorization": f"Bearer {self.token}"},params=({"opponentToken":opponentToken} if not opponentToken == "" else None))
+        if response.status_code == 200:
+            return
+        elif response.status_code == 429:
+            raise RateLimitedException("You are being rate limited.")
+        else:
+            raise ConnectionError(response.json()["error"])
+    def challengeAI(self,AIlevel:int=8,rules:gameSetup=gameSetup()) -> dict:
+        if not AIlevel in range(1,9):
+            raise ValueError("Invalid AI level")
+        response = requests.post(
+            f"{self.endpoint}/api/challenge/ai",
+            headers={"Authorization": f"Bearer {self.token}"},
+            params=({
+                "level": AIlevel,
+                "color": rules.getColor(),
+                "variant": rules.getPosition()[0],
+                "fen": rules.getPosition()[1],
+                "days": rules.getTimeControl()[1]
+                } if rules.getTimeControl()[0] else {
+                "level": AIlevel,
+                "color": rules.getColor(),
+                "variant": rules.getPosition()[0],
+                "fen": rules.getPosition()[1],
+                "clock.limit": rules.getTimeControl()[1],
+                "clock.increment": rules.getTimeControl()[2]
+            })
+        )
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 429:
+            raise RateLimitedException("You are being rate limited.")
+        else:
+            raise ConnectionError(response.json()["error"])
+    def openEndedChallenge(self,rated:bool=False,rules:gameSetup=gameSetup(),users:list=[],name:str="") -> dict:
+        if name == "":
+            name == f"Challenge from {self.accountinfo['username']}"
+        if users == []:
+            response = requests.post(f"{self.endpoint}/api/challenge/open",headers={
+                "Authorization": f"Bearer {self.token}"},params={
+                "rated": rated,
+                "variant": rules.getPosition()[0],
+                "days": rules.getTimeControl()[1],
+                "fen": rules.getPosition()[1],
+                "name": name,
+                "rules": rules.getArgs(),
+                } if rules.getTimeControl()[0] else {
+                "rated": rated,
+                "variant": rules.getPosition()[0],
+                "clock.limit": rules.getTimeControl()[1],
+                "clock.increment": rules.getTimeControl()[2],
+                "fen": rules.getPosition()[1],
+                "name": name,
+                "rules": rules.getArgs(),
+                })
+        else:
+            allusers = ""
+            for user in users:
+                allusers += f",{user}"
+            allusers = allusers.removeprefix(",")
+            response = requests.post(f"{self.endpoint}/api/challenge/open",headers={
+                "Authorization": f"Bearer {self.token}"},params={
+                "rated": rated,
+                "variant": rules.getPosition()[0],
+                "days": rules.getTimeControl()[1],
+                "fen": rules.getPosition()[1],
+                "name": name,
+                "rules": rules.getArgs(),
+                "users": allusers
+                } if rules.getTimeControl()[0] else {
+                "rated": rated,
+                "variant": rules.getPosition()[0],
+                "clock.limit": rules.getTimeControl()[1],
+                "clock.increment": rules.getTimeControl()[2],
+                "fen": rules.getPosition()[1],
+                "name": name,
+                "rules": rules.getArgs(),
+                "users": allusers
+                })
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 429:
+            raise RateLimitedException("You are being rate limited.")
+        else:
+            return ConnectionError(response.json()["error"])
 
 #* CUI Interface
 if __name__ == "__main__":
     account = lichessAccount(token)
-    print(account.accountinfo)
+    #print(account.getAccountInfo())
+    print(account.getEmail())
     #// asyncio.run(account.updateAccountInfo())
